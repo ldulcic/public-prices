@@ -106,7 +106,7 @@ def get_items():
     
     return jsonify(items_list[:100])
 
-@app.route('/items/<int:item_id>', methods=['GET']) # Changed route from /prices to /items
+@app.route('/prices/<int:item_id>', methods=['GET']) # Changed route from /prices to /items
 def get_item_by_id(item_id): # Renamed function
     if df_items is None or df_items.empty:
         load_data()
