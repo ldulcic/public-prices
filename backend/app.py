@@ -6,21 +6,26 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-DATA_FILE = os.path.join('data', 'consolidated_items.csv')
+DATA_FILE = os.path.join('data', 'matched_items_v1.csv')
 df_items = None
-EXPECTED_COLUMNS = ['id', 'name', 'price', 'store']
+
+EXPECTED_COLUMNS = [
+    'id', 'name', 'price', 'store', 'brand', 
+    'net_quantity', 'unit_of_measure', 'category',
+    'standardized_quantity', 'standardized_unit'
+]
 
 def load_data():
     global df_items
     try:
         if os.path.exists(DATA_FILE):
             df_items = pd.read_csv(DATA_FILE)
-            if df_items.empty and os.path.getsize(DATA_FILE) > 0: # File exists and is not empty but pandas read it as empty
+            if df_items.empty and os.path.getsize(DATA_FILE) > 0:
                 print(f"Warning: {DATA_FILE} was read as an empty DataFrame despite having content. Check formatting/headers.")
                 df_items = pd.DataFrame(columns=EXPECTED_COLUMNS)
                 return
             elif df_items.empty:
-                print(f"Warning: {DATA_FILE} is empty or does not exist.")
+                print(f"Warning: {DATA_FILE} is empty.")
                 df_items = pd.DataFrame(columns=EXPECTED_COLUMNS)
                 return
 
@@ -28,30 +33,37 @@ def load_data():
             for col in EXPECTED_COLUMNS:
                 if col not in df_items.columns:
                     print(f"Warning: Column '{col}' missing in {DATA_FILE}. Adding it as empty.")
-                    if col == 'id':
-                        df_items[col] = pd.Series(dtype=int)
-                    elif col == 'name' or col == 'store':
-                        df_items[col] = pd.Series(dtype=str)
+                    # Default types for potentially missing columns
+                    if col == 'id' or col == 'standardized_quantity': # id is primary, std_qty is numeric
+                        df_items[col] = pd.Series(dtype='Int64' if col == 'id' else float)
                     elif col == 'price':
-                        df_items[col] = pd.Series(dtype=float)
+                         df_items[col] = pd.Series(dtype=float)
+                    else: # name, store, brand, units, category
+                        df_items[col] = pd.Series(dtype=str)
             
+            # Specific type conversions for existing columns
             if 'id' in df_items.columns:
-                df_items['id'] = pd.to_numeric(df_items['id'], errors='coerce').astype('Int64') # Use Int64 for nullable integers
-                df_items.dropna(subset=['id'], inplace=True) 
+                df_items['id'] = pd.to_numeric(df_items['id'], errors='coerce').astype('Int64')
+                df_items.dropna(subset=['id'], inplace=True) # Critical: items must have a shared ID
+            
             if 'price' in df_items.columns:
                 df_items['price'] = pd.to_numeric(df_items['price'], errors='coerce')
-                # We keep rows with NaN prices for an item if it has other valid price entries, decision made in endpoint.
-            if 'name' in df_items.columns:
-                df_items['name'] = df_items['name'].astype(str)
-            if 'store' in df_items.columns:
-                df_items['store'] = df_items['store'].astype(str)
+            
+            if 'standardized_quantity' in df_items.columns:
+                df_items['standardized_quantity'] = pd.to_numeric(df_items['standardized_quantity'], errors='coerce')
 
-            # Drop rows where critical info like name or store might be missing after conversion (id/price handled by dropna or kept as NaN)
-            df_items.dropna(subset=['name', 'store'], inplace=True)
+            for col in ['name', 'store', 'brand', 'unit_of_measure', 'category', 'standardized_unit', 'net_quantity']:
+                if col in df_items.columns:
+                    df_items[col] = df_items[col].astype(str).fillna('') # Ensure string types and handle NaNs
+
+            # Drop rows where critical info for grouping/display might be missing
+            # Name and Store are essential for individual price entries.
+            # ID is essential for grouping.
+            df_items.dropna(subset=['id', 'name', 'store'], inplace=True) 
             
             print(f"Successfully loaded and processed {DATA_FILE}. Shape: {df_items.shape}")
-            if df_items.empty and os.path.exists(DATA_FILE):
-                print("Warning: Data file resulted in an empty DataFrame after processing (e.g., all rows had critical missing data).")
+            if df_items.empty and os.path.exists(DATA_FILE) and os.path.getsize(DATA_FILE) > 0:
+                print("Warning: Data file resulted in an empty DataFrame after processing.")
         else:
             print(f"Error: Data file {DATA_FILE} not found.")
             df_items = pd.DataFrame(columns=EXPECTED_COLUMNS)
@@ -61,57 +73,71 @@ def load_data():
 
 @app.route('/items', methods=['GET'])
 def get_items():
-    if df_items is None:
-        load_data()
+    if df_items is None or df_items.empty: # Check if empty even after load_data attempt
+        load_data() # Attempt to load if not already
     
-    if df_items is None or df_items.empty or not all(col in df_items.columns for col in EXPECTED_COLUMNS):
-        return jsonify({"error": "Item data is not available or is malformed. Please ensure consolidation script has run successfully and data file is correct."}), 500
+    if df_items is None or df_items.empty: # Re-check after load attempt
+        return jsonify({"error": "Item data is not available. Please ensure matching script has run and data file is correct."}), 500
 
     items_list = []
-    # Group by 'id' and 'name' to handle each unique item
-    for (item_id, item_name), group in df_items.groupby(['id', 'name'], observed=True, sort=True):
+    # Group by the shared 'id'. Other attributes like name, brand should be consistent within this group.
+    for item_id, group in df_items.groupby('id', observed=True, sort=True):
         price_entries = []
+        stores_for_item = set() # To track unique stores for the current item_id
         for _, row in group.iterrows():
-            # Only include entries where price is not NaN
             if pd.notna(row['price']):
                 price_entries.append({'price': row['price'], 'store': row['store']})
+                stores_for_item.add(row['store'])
         
-        if price_entries: # Only add item if it has at least one valid price entry
+        # Only add item if it has at least one valid price entry AND appears in at least 3 stores
+        if price_entries and len(stores_for_item) >= 3:
+            first_row = group.iloc[0]
             items_list.append({
-                'id': int(item_id), # Ensure id is standard int for JSON
-                'name': item_name,
-                'prices': price_entries
+                'id': int(item_id),
+                'name': first_row['name'],
+                # 'brand': first_row.get('brand', ''), # Use .get for new columns
+                # 'category': first_row.get('category', ''),
+                # 'net_quantity_original': first_row.get('net_quantity', ''),
+                # 'unit_of_measure_original': first_row.get('unit_of_measure', ''),
+                # 'standardized_quantity': first_row.get('standardized_quantity', None), # Can be NaN if conversion failed
+                # 'standardized_unit': first_row.get('standardized_unit', ''),
+                'prices': sorted(price_entries, key=lambda x: x['price']) # Sort prices
             })
     
     return jsonify(items_list[:100])
 
-@app.route('/prices/<int:item_id>', methods=['GET'])
-def get_prices_by_id(item_id):
-    if df_items is None:
+@app.route('/items/<int:item_id>', methods=['GET']) # Changed route from /prices to /items
+def get_item_by_id(item_id): # Renamed function
+    if df_items is None or df_items.empty:
         load_data()
 
-    if df_items is None or df_items.empty or not all(col in df_items.columns for col in EXPECTED_COLUMNS):
-        return jsonify({"error": "Item data is not available or is malformed."}), 500
+    if df_items is None or df_items.empty:
+        return jsonify({"error": "Item data is not available."}), 500
 
-    item_data = df_items[df_items['id'] == item_id]
+    item_data_group = df_items[df_items['id'] == item_id]
     
-    if item_data.empty:
+    if item_data_group.empty:
         return jsonify({"message": "Item not found"}), 404
         
-    # Assuming item_id is unique, item_name will be the same for all rows in item_data
-    item_name = item_data['name'].iloc[0]
+    first_row = item_data_group.iloc[0]
     price_entries = []
-    for _, row in item_data.iterrows():
+    for _, row in item_data_group.iterrows():
         if pd.notna(row['price']):
             price_entries.append({'price': row['price'], 'store': row['store']})
             
-    if not price_entries: # Should not happen if item was found, but as a safeguard
-         return jsonify({"message": "Item found but has no valid price entries"}), 404
+    if not price_entries:
+         return jsonify({"message": "Item found but has no valid price entries"}), 404 # Should be rare if item exists
 
     return jsonify({
         'id': int(item_id),
-        'name': item_name,
-        'prices': price_entries
+        'name': first_row['name'],
+        # 'brand': first_row.get('brand', ''),
+        # 'category': first_row.get('category', ''),
+        # 'net_quantity_original': first_row.get('net_quantity', ''),
+        # 'unit_of_measure_original': first_row.get('unit_of_measure', ''),
+        # 'standardized_quantity': first_row.get('standardized_quantity', None),
+        # 'standardized_unit': first_row.get('standardized_unit', ''),
+        'prices': sorted(price_entries, key=lambda x: x['price'])
     })
 
 if __name__ == '__main__':

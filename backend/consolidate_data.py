@@ -5,6 +5,8 @@ def get_cleaned_price(price_str, decimal_separator):
     if not price_str:
         return None
     
+    price_str = price_str.strip().strip('"') # Ensure quotes are stripped from price string too
+    
     # Standardize decimal separator to period
     if decimal_separator == ',':
         price_str = price_str.replace('.', '') # Remove potential thousand separator
@@ -12,7 +14,6 @@ def get_cleaned_price(price_str, decimal_separator):
     elif decimal_separator == '.':
         price_str = price_str.replace(',', '') # Remove potential thousand separator
     
-    # Remove any other non-numeric characters except the period and minus sign (for potential negative prices, though unlikely here)
     cleaned_price_chars = []
     for char in price_str:
         if char.isdigit() or char == '.' or (char == '-' and not cleaned_price_chars):
@@ -21,7 +22,6 @@ def get_cleaned_price(price_str, decimal_separator):
     cleaned_price = ''.join(cleaned_price_chars)
 
     try:
-        # Handle cases like '.79' by prefixing with '0' if it starts with '.'
         if cleaned_price.startswith('.'):
             cleaned_price = '0' + cleaned_price
         return float(cleaned_price)
@@ -32,20 +32,22 @@ def process_csv_files(data_folder, output_filename):
     consolidated_data = []
     item_name_to_id = {}
     next_id = 1
-    
+
     files_to_process = [
-        # (filename, store_name, name_col_idx, price_col_idx, delimiter, encodings_to_try, decimal_separator, header_lines_to_skip, quote_character)
-        ('tommy.csv', 'tommy', 2, 7, ',', ['utf-8'], ',', 1, None),
-        ('spar.csv', 'spar', 0, 5, ';', ['utf-8', 'cp1250', 'iso-8859-2'], '.', 1, None),
-        ('lidl.csv', 'lidl', 0, 6, ',', ['utf-8', 'cp1250', 'iso-8859-2'], '.', 1, None),
-        ('konzum.csv', 'konzum', 0, 5, ',', ['utf-8'], '.', 1, None),
-        ('eurospin.csv', 'eurospin', 0, 5, ';', ['utf-8'], '.', 1, '"'),
-        ('studenac.csv', 'studenac', 0, 6, ',', ['utf-8', 'cp1250', 'iso-8859-2'], '.', 1, None)
+        # (filename, store_name, name_idx, price_idx, brand_idx, quantity_idx, unit_idx, category_idx, delimiter, encodings, dec_sep, skip, quote_char)
+        ('tommy.csv', 'tommy', 2, 7, 3, 6, 5, 4, ',', ['utf-8'], ',', 1, None),
+        ('spar.csv', 'spar', 0, 5, 2, 3, 4, 12, ';', ['utf-8', 'cp1250', 'iso-8859-2'], '.', 1, None),
+        ('lidl.csv', 'lidl', 0, 6, 5, 2, 3, 9, ',', ['utf-8', 'cp1250', 'iso-8859-2'], '.', 1, None),
+        ('konzum.csv', 'konzum', 0, 5, 2, 3, 4, 11, ',', ['utf-8'], '.', 1, None),
+        ('eurospin.csv', 'eurospin', 0, 5, 2, 3, 4, 12, ';', ['utf-8'], '.', 1, '"'),
+        ('studenac.csv', 'studenac', 0, 6, 5, 2, 3, 9, ',', ['utf-8', 'cp1250', 'iso-8859-2'], '.', 1, None)
     ]
 
-    print(f"Output will be written to: {os.path.join(data_folder, output_filename)}")
+    output_header = ['id', 'name', 'price', 'store', 'brand', 'net_quantity', 'unit_of_measure', 'category']
+    print(f"Output will be written to: {os.path.join(data_folder, output_filename)} with header: {output_header}")
 
-    for filename, store_name, name_col_idx, price_col_idx, delimiter, encodings, dec_sep, skip_lines, quotechar_val in files_to_process:
+    for config in files_to_process:
+        filename, store_name, name_idx, price_idx, brand_idx, qty_idx, unit_idx, cat_idx, delimiter, encodings, dec_sep, skip_lines, quotechar_val = config
         filepath = os.path.join(data_folder, filename)
         print(f"\nProcessing {filename} for store {store_name}...")
         
@@ -55,12 +57,8 @@ def process_csv_files(data_folder, output_filename):
         for enc in encodings:
             try:
                 with open(filepath, 'r', encoding=enc, newline='') as f:
-                    if quotechar_val:
-                        # For Eurospin, fields are quoted
-                        reader = csv.reader(f, delimiter=delimiter, quotechar=quotechar_val)
-                    else:
-                        reader = csv.reader(f, delimiter=delimiter)
-                    raw_file_content = list(reader)
+                    reader_obj = csv.reader(f, delimiter=delimiter, quotechar=quotechar_val) if quotechar_val else csv.reader(f, delimiter=delimiter)
+                    raw_file_content = list(reader_obj)
                 used_encoding = enc
                 print(f"Successfully read {filename} with encoding {used_encoding}")
                 break 
@@ -68,11 +66,11 @@ def process_csv_files(data_folder, output_filename):
                 print(f"Failed to decode {filename} with {enc}. Trying next...")
             except FileNotFoundError:
                 print(f"File not found: {filepath}. Skipping.")
-                raw_file_content = None # Ensure it's reset
+                raw_file_content = None 
                 break
             except Exception as e:
                 print(f"An error occurred while reading {filename} with {enc}: {e}. Skipping.")
-                raw_file_content = None # Ensure it's reset
+                raw_file_content = None 
                 break
         
         if raw_file_content is None:
@@ -86,22 +84,25 @@ def process_csv_files(data_folder, output_filename):
                 header_skipped_count += 1
                 continue
 
-            if not row: # Skip empty rows
+            if not row or len(row) < max(name_idx, price_idx, brand_idx, qty_idx, unit_idx, cat_idx) +1: # check if row has enough columns
+                # print(f"Info: Skipping row {row_idx+1} in {filename} due to being empty or having insufficient columns.")
                 continue
 
             try:
-                item_name_raw = row[name_col_idx].strip().strip('"')
-                price_str = row[price_col_idx].strip()
+                item_name_raw = row[name_idx].strip().strip('"')
+                price_str = row[price_idx].strip().strip('"') 
+                brand_raw = row[brand_idx].strip().strip('"') if brand_idx is not None and row[brand_idx] else ''
+                qty_raw = row[qty_idx].strip().strip('"') if qty_idx is not None and row[qty_idx] else ''
+                unit_raw = row[unit_idx].strip().strip('"') if unit_idx is not None and row[unit_idx] else ''
+                cat_raw = row[cat_idx].strip().strip('"') if cat_idx is not None and row[cat_idx] else ''
 
                 if not item_name_raw: 
-                    # print(f"Info: Skipping row {row_idx+1} in {filename} due to empty item name.")
                     continue
 
                 item_name_normalized = ' '.join(item_name_raw.lower().split())
                 price = get_cleaned_price(price_str, dec_sep)
                 
-                if price is None or price < 0: # Assuming prices must be non-negative
-                    # print(f"Info: Skipping item '{item_name_raw}' from {filename} due to invalid/empty/negative price: '{price_str}'")
+                if price is None or price < 0: 
                     continue
 
                 item_id = item_name_to_id.get(item_name_normalized)
@@ -110,7 +111,8 @@ def process_csv_files(data_folder, output_filename):
                     item_name_to_id[item_name_normalized] = next_id
                     next_id += 1
                 
-                consolidated_data.append([item_id, item_name_raw, f"{price:.2f}", store_name]) # Format price to 2 decimal places
+                # id, name, price, store, brand, net_quantity, unit_of_measure, category
+                consolidated_data.append([item_id, item_name_raw, f"{price:.2f}", store_name, brand_raw, qty_raw, unit_raw, cat_raw])
                 rows_processed_for_file +=1
 
             except IndexError:
@@ -123,30 +125,26 @@ def process_csv_files(data_folder, output_filename):
 
     output_filepath = os.path.join(data_folder, output_filename)
     try:
-        # Remove duplicate rows before writing
         if consolidated_data:
-            # Convert list of lists to set of tuples to find unique rows
-            unique_data_tuples = sorted(list(set(tuple(row) for row in consolidated_data))) # Sort for consistent order
-            # Convert back to list of lists
+            unique_data_tuples = sorted(list(set(tuple(row) for row in consolidated_data)))
             consolidated_data_unique_list = [list(t) for t in unique_data_tuples]
         else:
             consolidated_data_unique_list = []
 
         with open(output_filepath, 'w', newline='', encoding='utf-8') as f_out:
             writer = csv.writer(f_out)
-            writer.writerow(['id', 'name', 'price', 'store']) 
-            writer.writerows(consolidated_data_unique_list) # Use the unique list
+            writer.writerow(output_header) 
+            writer.writerows(consolidated_data_unique_list) 
         print(f"\nConsolidated data successfully written to {output_filepath}")
-        print(f"Total unique items (distinct names found): {len(item_name_to_id)}")
-        print(f"Total rows in consolidated file (excluding header): {len(consolidated_data_unique_list)}") # Count unique rows
+        print(f"Total unique item names found (used for ID generation): {len(item_name_to_id)}")
+        print(f"Total rows in consolidated file (excluding header): {len(consolidated_data_unique_list)}")
     except Exception as e:
         print(f"Error writing to output file {output_filepath}: {e}")
 
 if __name__ == "__main__":
     data_directory = "data" 
-    output_csv_name = "consolidated_items.csv" # This will be overwritten as per user request.
+    output_csv_name = "consolidated_items.csv" 
     
-    # Check if data directory exists
     if not os.path.isdir(data_directory):
         print(f"Error: Data directory '{data_directory}' not found. Please ensure it exists in the same location as the script.")
         exit()
