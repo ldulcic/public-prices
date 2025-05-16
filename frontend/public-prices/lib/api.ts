@@ -42,6 +42,14 @@ const fetchWithTimeout = async (url: string, options: RequestInit = {}, timeout 
   }
 }
 
+// Helper function to capitalize first letter of each word
+const capitalizeWords = (str: string): string => {
+  return str
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+}
+
 // Transform API item to our internal Item format
 const transformApiItem = (apiItem: ApiItem): Item => {
   // Find the lowest price
@@ -49,7 +57,7 @@ const transformApiItem = (apiItem: ApiItem): Item => {
 
   return {
     id: apiItem.id.toString(),
-    name: apiItem.name,
+    name: capitalizeWords(apiItem.name),
     // No image in API, use placeholder
     image: `/placeholder.svg?height=400&width=400&text=${encodeURIComponent(apiItem.name)}`,
     lowestPrice,
@@ -61,17 +69,17 @@ const transformApiItemDetails = (apiItemDetails: ApiItemDetails): ItemWithPrices
   // Transform prices to include more information
   const transformedPrices = apiItemDetails.prices.map((p) => ({
     price: p.price,
-    store: p.store,
+    store: capitalizeWords(p.store),
     // Add location and URL (these aren't in the API, so we're adding defaults)
-    location: `${p.store.charAt(0).toUpperCase() + p.store.slice(1)} Store`,
+    location: `${capitalizeWords(p.store)} Store`,
     url: "#",
   }))
 
   return {
     id: apiItemDetails.id.toString(),
-    name: apiItemDetails.name,
+    name: capitalizeWords(apiItemDetails.name),
     // Add a generic description since it's not in the API
-    description: `${apiItemDetails.name} - Available at ${apiItemDetails.prices.length} stores`,
+    description: `${capitalizeWords(apiItemDetails.name)} - Available at ${apiItemDetails.prices.length} stores`,
     // No image in API, use placeholder
     image: `/placeholder.svg?height=400&width=400&text=${encodeURIComponent(apiItemDetails.name)}`,
     prices: transformedPrices,

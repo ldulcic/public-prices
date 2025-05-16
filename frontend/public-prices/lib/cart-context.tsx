@@ -46,7 +46,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
         return prevItems.map((i) => (i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i))
       } else {
         // Otherwise add new item with quantity 1
-        return [...prevItems, { ...item, quantity: 1 }]
+        return [...prevItems, { 
+          ...item, 
+          name: item.name.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' '),
+          quantity: 1 
+        }]
       }
     })
   }
