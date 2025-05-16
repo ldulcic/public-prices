@@ -1,8 +1,10 @@
 from flask import Flask, jsonify
 import pandas as pd
+from flask_cors import CORS
 import os
 
 app = Flask(__name__)
+CORS(app)
 
 DATA_FILE = os.path.join('data', 'consolidated_items.csv')
 df_items = None
@@ -81,7 +83,7 @@ def get_items():
                 'prices': price_entries
             })
     
-    return jsonify(items_list)
+    return jsonify(items_list[:100])
 
 @app.route('/prices/<int:item_id>', methods=['GET'])
 def get_prices_by_id(item_id):
